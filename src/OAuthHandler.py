@@ -7,6 +7,7 @@ import hashlib
 import threading
 import webbrowser
 import time
+import string
 
 class OAuthManager:
     _instance = None
@@ -32,8 +33,10 @@ class OAuthHandler(http.server.SimpleHTTPRequestHandler):
     _CURRENT_ACCESS_TOKEN = ''
     _CURRENT_REFRESH_TOKEN = ''
 
-    _csrf_state = ''.join(random.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~') for x in range(16))
-    _code_verifier = ''.join(random.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~') for x in range(64))
+    _csrf_state_length = 16
+    _code_verifier_length = 64
+    _csrf_state = ''.join(random.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~') for x in range(_csrf_state_length))
+    _code_verifier = ''.join(random.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~') for x in range(_code_verifier_length))
 
     class CustomTCPServer(socketserver.TCPServer):
         allow_reuse_address = True
@@ -133,6 +136,16 @@ class OAuthHandler(http.server.SimpleHTTPRequestHandler):
             return('Keyboard interrupt')
         finally:
             return('OAuth process completed.')
+        
+    @classmethod
+    def update_scopes(cls, new_scopes):
+        if cls._SCOPES == new_scopes:
+            return('Requested scopes already active')
+        else:
+            cls._revoke_access_token()
+            cls.set_scopes(new_scopes)
+            cls.oath_workflow()
+            return('Scopes successfully updated')
 
     @staticmethod
     def _fetch_access_token(code):
@@ -147,15 +160,15 @@ class OAuthHandler(http.server.SimpleHTTPRequestHandler):
         response = requests.post(OAuthHandler._TOKEN_URL, headers={'Content-Type': 'application/x-www-form-urlencoded'}, data=data)
         return response.json()
 
-    @classmethod
-    def refresh_access_token(cls):
+    @staticmethod
+    def refresh_access_token():
         data = {
-            'client_key': cls._CLIENT_KEY,
-            'client_secret': cls._CLIENT_SECRET,
+            'client_key': OAuthHandler._CLIENT_KEY,
+            'client_secret': OAuthHandler._CLIENT_SECRET,
             'grant_type': 'refresh_token',
-            'refresh_token': cls._CURRENT_REFRESH_TOKEN
+            'refresh_token': OAuthHandler._CURRENT_REFRESH_TOKEN
         }
-        response = requests.post(cls._TOKEN_URL, headers={'Content-Type': 'application/x-www-form-urlencoded'}, data=data)
+        response = requests.post(OAuthHandler._TOKEN_URL, headers={'Content-Type': 'application/x-www-form-urlencoded'}, data=data)
         return response.json()
 
     @staticmethod
@@ -171,6 +184,14 @@ class OAuthHandler(http.server.SimpleHTTPRequestHandler):
         return response.json()
 
     @classmethod
+    def set_csrf_state_length(cls, csrf_state_length):
+        cls._csrf_state_length = csrf_state_length
+    
+    @classmethod
+    def set_code_verifier_length(cls, code_verifier_length):
+        cls._code_verifier_length = code_verifier_length
+
+    @classmethod
     def set_port(cls, port):
         cls._PORT = port
         cls._REDIRECT_URI = f'http://127.0.0.1:{cls._PORT}/callback/'
@@ -181,7 +202,12 @@ class OAuthHandler(http.server.SimpleHTTPRequestHandler):
 
     @classmethod
     def set_scopes(cls, scopes):
-        cls._SCOPES = scopes
+        sc = scopes.replace(" ", "")
+        scopelist = sc.split(',')
+        for s in scopelist:
+            if s not in ['user.info.basic', 'video.publish', 'video.upload', 'artist.certification.read', 'artist.certification.update', 'user.info.profile', 'user.info.stats', 'video.list']:
+                raise RuntimeWarning('One or more requested scopes are unknown')
+        cls._SCOPES = sc
 
     @classmethod
     def get_scopes(cls):
