@@ -7,7 +7,6 @@ import hashlib
 import threading
 import webbrowser
 import time
-import string
 
 class OAuthManager:
     _instance = None
@@ -32,14 +31,24 @@ class OAuthHandler(http.server.SimpleHTTPRequestHandler):
     _OAUTH_SUCCESS = False
     _CURRENT_ACCESS_TOKEN = ''
     _CURRENT_REFRESH_TOKEN = ''
+    _QR_AUTH_DEFAULT = False
 
     _csrf_state_length = 16
     _code_verifier_length = 64
+    _client_ticket_length = 64
     _csrf_state = ''.join(random.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~') for x in range(_csrf_state_length))
     _code_verifier = ''.join(random.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~') for x in range(_code_verifier_length))
 
     class CustomTCPServer(socketserver.TCPServer):
         allow_reuse_address = True
+
+    @staticmethod
+    def _print_error(json_error):
+        print('Recieved an error:'+"\n")
+        print('    Error: '+str(json_error.get('error')))
+        print('    Description: '+str(json_error.get('error_description')))
+        print('    Log ID: '+str(json_error.get('log_id')))
+
 
     def do_GET(self):
         if self.path.startswith('/oauth'):
@@ -136,7 +145,65 @@ class OAuthHandler(http.server.SimpleHTTPRequestHandler):
             return('Keyboard interrupt')
         finally:
             return('OAuth process completed.')
+    
+    @staticmethod
+    def generate_qr_code():
+        data = {
+            'client_key': OAuthHandler._CLIENT_KEY,
+            'scope': OAuthHandler._SCOPES,
+            'state': OAuthHandler._csrf_state
+        }
+        response = requests.post('https://open.tiktokapis.com/v2/oauth/get_qrcode/', headers={'Content-Type': 'application/x-www-form-urlencoded'}, data=data)
+        response_data = response.json()
+
+        if 'error' in response_data:
+            OAuthHandler._print_error(response_data)
+            return
+        else:
+            client_ticket = urlparse.quote(''.join(random.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~') for x in range(OAuthHandler._client_ticket_length)))
+            scan_qrcode_url = response_data.get('scan_qrcode_url')
+            return (scan_qrcode_url.replace('tobefilled', client_ticket), response_data.get('token'), client_ticket)
+
+    @classmethod
+    def _check_qr_code_status(cls, token):
+        data = {
+            'client_key': cls._CLIENT_KEY,
+            'client_secret': cls._CLIENT_SECRET,
+            'token': token
+        }
+        response = requests.post('https://open.tiktokapis.com/v2/oauth/check_qrcode/', headers={'Content-Type': 'application/x-www-form-urlencoded'}, data=data)
+        return response.json()        
+
+    @classmethod
+    def qr_code_workflow(cls, token, client_ticket, timeout = 30, check_status_delay = 1):      
+        start_time = time.time()
+
+        while time.time() - start_time < timeout:
+            status_response = cls._check_qr_code_status(token)
+            status = status_response.get('status')
+            client_ticket_response = status_response.get('client_ticket')
+
+            if client_ticket_response == client_ticket and status == 'confirmed':
+                code = status_response.get('code')
+                token_response_data = cls._fetch_access_token(code)
         
+                if 'error' in token_response_data:
+                    cls._print_error(token_response_data)
+                else:
+                    OAuthHandler._OAUTH_SUCCESS = True
+                    OAuthHandler._CURRENT_ACCESS_TOKEN = token_response_data['access_token']
+                    OAuthHandler._CURRENT_REFRESH_TOKEN = token_response_data['refresh_token']
+                    print(OAuthHandler._CURRENT_ACCESS_TOKEN)
+                return
+
+            elif status == 'expired':
+                print("QR code expired.")
+                return
+
+            time.sleep(check_status_delay)
+        print('Timeout reached without QR code confirmation.')
+        return
+
     @classmethod
     def update_scopes(cls, new_scopes):
         if cls._SCOPES == new_scopes:
@@ -144,7 +211,10 @@ class OAuthHandler(http.server.SimpleHTTPRequestHandler):
         else:
             cls._revoke_access_token()
             cls.set_scopes(new_scopes)
-            cls.oath_workflow()
+            if cls._QR_AUTH_DEFAULT:
+                cls.qr_code_workflow()
+            else:
+                cls.oath_workflow()
             return('Scopes successfully updated')
 
     @staticmethod
@@ -192,9 +262,14 @@ class OAuthHandler(http.server.SimpleHTTPRequestHandler):
         cls._code_verifier_length = code_verifier_length
 
     @classmethod
-    def set_port(cls, port):
+    def set_client_ticket_length(cls, client_ticket_length):
+        cls._client_ticket_length = client_ticket_length
+
+    @classmethod
+    def set_port(cls, port, update_standard_redirect_uri=True):
         cls._PORT = port
-        cls._REDIRECT_URI = f'http://127.0.0.1:{cls._PORT}/callback/'
+        if update_standard_redirect_uri:
+            cls._REDIRECT_URI = f'http://127.0.0.1:{cls._PORT}/callback/'
 
     @classmethod
     def get_port(cls):
@@ -206,7 +281,7 @@ class OAuthHandler(http.server.SimpleHTTPRequestHandler):
         scopelist = sc.split(',')
         for s in scopelist:
             if s not in ['user.info.basic', 'video.publish', 'video.upload', 'artist.certification.read', 'artist.certification.update', 'user.info.profile', 'user.info.stats', 'video.list']:
-                raise RuntimeWarning('One or more requested scopes are unknown')
+                raise RuntimeWarning('Requested scope '+str(s)+' unknown, continuing...')
         cls._SCOPES = sc
 
     @classmethod
