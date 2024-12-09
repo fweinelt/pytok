@@ -54,6 +54,8 @@ class LoginKit:
         self.__CODE_VERIFIER = ''.join(random.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~') for x in range(self.__CODE_VERIFIER_LENGTH))
         self.__CURRENT_ACCESS_TOKEN = None
         self.__CURRENT_REFRESH_TOKEN = None
+        self.__TOKEN_TYPE = None
+        self.__OPEN_ID = None
         self.__REQUEST_HEADER = request_header
 
     # Property definitions
@@ -89,6 +91,14 @@ class LoginKit:
     @property
     def current_refresh_token(self):
         return self.__CURRENT_REFRESH_TOKEN
+
+    @property
+    def token_type(self):
+        return self.__TOKEN_TYPE
+
+    @property
+    def open_id(self):
+        return self.__OPEN_ID
     
     @property
     def client_key(self):
@@ -145,8 +155,6 @@ class LoginKit:
         else:
             handler.wfile.write(f"Authorization workflow successful".encode())
             self.__OAUTH_SUCCESS = True
-            self.__CURRENT_ACCESS_TOKEN = token_response_data.get('access_token')
-            self.__CURRENT_REFRESH_TOKEN = token_response_data.get('refresh_token')
 
     def oath_server(self, timeout = 30, open_in_browser='new_tab'):
         handler = lambda *args, **kwargs: self.Handler(*args, login_kit=self, **kwargs)
@@ -205,14 +213,7 @@ class LoginKit:
 
             if client_ticket_response == client_ticket and status == 'confirmed':
                 code = status_response.get('code')
-                token_response_data = self._fetch_access_token(code)
-        
-                if 'error' in token_response_data:
-                    return
-                else:
-                    self.__OAUTH_SUCCESS = True
-                    self.__CURRENT_ACCESS_TOKEN = token_response_data['access_token']
-                    self.__CURRENT_REFRESH_TOKEN = token_response_data['refresh_token']
+                self._fetch_access_token(code)
                 return
 
             elif status == 'expired':
@@ -235,6 +236,8 @@ class LoginKit:
             'code_verifier': self.__CODE_VERIFIER
         }
         response = requests.post(self.__BASE_API_URL+'oauth/token/', headers=self.__REQUEST_HEADER, data=data)
+        self._handle_json_response_data(response.json())
+        
         return response.json()
 
     def refresh_access_token(self):
@@ -243,8 +246,10 @@ class LoginKit:
             'client_secret': self.__CLIENT_SECRET,
             'grant_type': 'refresh_token',
             'refresh_token': self.__CURRENT_REFRESH_TOKEN
-        }
+        }     
         response = requests.post(self.__BASE_API_URL+'oauth/token/', headers=self.__REQUEST_HEADER, data=data)
+        self._handle_json_response_data(response.json())
+        
         return response.json()
 
     def revoke_access_token(self):
@@ -263,11 +268,24 @@ class LoginKit:
         sha256 = hashlib.sha256()
         sha256.update(input_string.encode())
         return sha256.hexdigest()
+
+    def _handle_json_response_data(self, token_response_data):
+        if 'error' in token_response_data:
+            return
+        else:
+            self.__OAUTH_SUCCESS = True
+            self.__CURRENT_ACCESS_TOKEN = token_response_data['access_token']
+            self.__CURRENT_REFRESH_TOKEN = token_response_data['refresh_token']
+            old_scopes = self.scopes
+            self.__SCOPES = set(token_response_data['scope'].split(','))
+            if old_scopes != self.scopes:
+                print('Requested scopes differ from currently active scopes within the access token. Consider revoking the current access token and requesting again. Requested scopes: '+str(old_scopes)+' Active scopes: '+str(self.scopes))
+            self.__TOKEN_TYPE = token_response_data['token_type']
+            self.__OPEN_ID = token_response_data['open_id']
     
-    def set__SCOPES(self, scopes):
-        sc = scopes.replace(" ", "")
-        scopelist = sc.split(',')
-        for s in scopelist:
-            if s not in ['user.info.basic', 'video.publish', 'video.upload', 'artist.certification.read', 'artist.certification.update', 'user.info.profile', 'user.info.stats', 'video.list']:
-                raise RuntimeWarning('Requested scope '+str(s)+' unknown, continuing...')
+    def set__SCOPES(self, scopes: List[str]):
+        for s in scopes:
+            s.replace(" ", "")
+            if s not in ['user.info.basic', 'user.info.profile', 'user.info.stats', 'video.list', 'video.publish', 'video.upload', 'artist.certification.read', 'artist.certification.update', 'portability.activity.ongoing', 'portability.activity.single', 'portability.all.ongoing', 'portability.all.single', 'portability.directmessages.ongoing', 'portability.directmessages.single', 'portability.postsandprofile.ongoing', 'portability.postsandprofile.single', 'research.adlib.basic', 'research.data.basic', 'research.data.u18eu', ]:
+                print('Requested scope '+str(s)+' unknown, continuing...')
         self.__SCOPES = sc
