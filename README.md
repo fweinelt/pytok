@@ -1,7 +1,7 @@
 # PyTok - a Python implementation of the TikTok API
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Version](https://img.shields.io/badge/version-0.1.0-brightgreen.svg)
+![Version](https://img.shields.io/badge/version-0.1.1-brightgreen.svg)
 
 ## Table of Contents
 - [Introduction](#introduction)
@@ -117,6 +117,13 @@ A list of ideas and features you can expect in the future.
 - Expand on the documentation
 
 ## Changelog
+
+### 0.1.1
+
+- Added properties `token_type` and `open_id` to `LoginKit`
+- Zentralised access token response handling and added an updating process for the active scopes and other parameters via private method `_handle_json_response_data`
+- Added warning, if active scopes differ from requested scopes
+- Updated list of scopes to check for in `set__SCOPES` and changed the RuntimeWarning to print
 
 ### 0.1.0
 
